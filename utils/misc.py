@@ -5,10 +5,12 @@ from PIL import Image
 from loguru import logger
 import sys
 import inspect
+from typing import Optional, List
 
 import torch
 from torch import nn
 import torch.distributed as dist
+from torch import Tensor
 
 
 def init_random_seed(seed=None, device='cuda', rank=0, world_size=1):
@@ -291,3 +293,82 @@ def setup_logger(save_dir, distributed_rank=0, filename="log.txt", mode="a"):
 
     # redirect stdout/stderr to loguru
     redirect_sys_output("INFO")
+
+class NestedTensor(object):
+    def __init__(self, tensors, mask: Optional[Tensor]):
+        self.tensors = tensors
+        self.mask = mask
+
+    def to(self, device):
+        # type: (Device) -> NestedTensor # noqa
+        cast_tensor = self.tensors.to(device)
+        mask = self.mask
+        if mask is not None:
+            assert mask is not None
+            cast_mask = mask.to(device)
+        else:
+            cast_mask = None
+        return NestedTensor(cast_tensor, cast_mask)
+
+    def decompose(self):
+        return self.tensors, self.mask
+
+    def __repr__(self):
+        return str(self.tensors)
+
+
+def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
+    """
+    This function receives a list of image tensors and returns a NestedTensor of the padded images, along with their
+    padding masks (true for padding areas, false otherwise).
+    """
+    max_size = _max_by_axis([list(img.shape) for img in tensor_list])
+    batch_shape = [len(tensor_list)] + max_size
+    b, c, h, w = batch_shape
+    dtype = tensor_list[0].dtype
+    device = tensor_list[0].device
+    tensor = torch.zeros(batch_shape, dtype=dtype, device=device)
+    mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
+    for img, pad_img, m in zip(tensor_list, tensor, mask):
+        pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
+        m[: img.shape[1], :img.shape[2]] = False
+    return NestedTensor(tensor, mask)
+
+
+def nested_tensor_from_videos_list(videos_list: List[Tensor]):
+    """
+    This function receives a list of videos (each of shape [T, C, H, W]) and returns a NestedTensor of the padded
+    videos (shape [T, B, C, PH, PW], along with their padding masks (true for padding areas, false otherwise, of shape
+    [T, B, PH, PW].
+    """
+    max_size = _max_by_axis([list(img.shape) for img in videos_list])
+    padded_batch_shape = [len(videos_list)] + max_size
+    b, t, c, h, w = padded_batch_shape
+    dtype = videos_list[0].dtype
+    device = videos_list[0].device
+    padded_videos = torch.zeros(padded_batch_shape, dtype=dtype, device=device)
+    videos_pad_masks = torch.ones((b, t, h, w), dtype=torch.bool, device=device)
+    for vid_frames, pad_vid_frames, vid_pad_m in zip(videos_list, padded_videos, videos_pad_masks):
+        pad_vid_frames[:vid_frames.shape[0], :, :vid_frames.shape[2], :vid_frames.shape[3]].copy_(vid_frames)
+        vid_pad_m[:vid_frames.shape[0], :vid_frames.shape[2], :vid_frames.shape[3]] = False
+    # transpose the temporal and batch dims and create a NestedTensor:
+    return NestedTensor(padded_videos.transpose(0, 1), videos_pad_masks.transpose(0, 1))
+
+def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corners=None):
+    # type: (Tensor, Optional[List[int]], Optional[float], str, Optional[bool]) -> Tensor
+    """
+    Equivalent to nn.functional.interpolate, but with support for empty batch sizes.
+    This will eventually be supported natively by PyTorch, and this
+    class can go away.
+    """
+    if float(torchvision.__version__.split(".")[1]) < 7.0:
+        if input.numel() > 0:
+            return torch.nn.functional.interpolate(
+                input, size, scale_factor, mode, align_corners
+            )
+
+        output_shape = _output_size(2, input, size, scale_factor)
+        output_shape = list(input.shape[:-2]) + list(output_shape)
+        return _new_empty_tensor(input, output_shape)
+    else:
+        return torchvision.ops.misc.interpolate(input, size, scale_factor, mode, align_corners)

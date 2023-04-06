@@ -9,7 +9,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 import wandb
 from loguru import logger
-from utils.dataset import tokenize
+from utils.refcoco_dataset import tokenize
 from utils.misc import (AverageMeter, ProgressMeter, concat_all_gather,
                         trainMetricGPU)
 
@@ -145,71 +145,68 @@ def validate(val_loader, model, epoch, args):
 
 @torch.no_grad()
 def inference(test_loader, model, args):
-    iou_list = []
     tbar = tqdm(test_loader, desc='Inference:', ncols=100)
     model.eval()
     time.sleep(2)
-    for img, param in tbar:
-        # data
-        img = img.cuda(non_blocking=True)
-        mask = cv2.imread(param['mask_dir'][0], flags=cv2.IMREAD_GRAYSCALE)
-        # dump image & mask
-        if args.visualize:
-            seg_id = param['seg_id'][0].cpu().numpy()
-            img_name = '{}-img.jpg'.format(seg_id)
-            mask_name = '{}-mask.png'.format(seg_id)
-            cv2.imwrite(filename=os.path.join(args.vis_dir, img_name),
-                        img=param['ori_img'][0].cpu().numpy())
-            cv2.imwrite(filename=os.path.join(args.vis_dir, mask_name),
-                        img=mask)
-        # multiple sentences
-        for sent in param['sents']:
-            mask = mask / 255.
-            text = tokenize(sent, args.word_len, True)
+    for source_frames, params, text_query in tbar:
+        video_id = params['video_id']
+        video_dir = os.path.join(args.vis_dir, video_id[0])
+        if not os.path.exists(video_dir):
+            os.makedirs(video_dir)
+        for i in range(len(source_frames)):
+            # data
+            img = source_frames[i].cuda(non_blocking=True)
+            # dump image ( original image)
+            if args.visualize:
+                video_id = params['video_id'][0]
+                frame_indice = params['frame_indices'][i][0]
+                img_name = 'ori-img-{}-{}.jpg'.format(video_id,frame_indice)
+                cv2.imwrite(filename=os.path.join(args.vis_dir, video_id,img_name),
+                            img=img.cpu().numpy())
+            # one sentence each
+            text = tokenize(text_query, args.word_len, True)
             text = text.cuda(non_blocking=True)
+            
             # inference
             pred = model(img, text)
             pred = torch.sigmoid(pred)
             if pred.shape[-2:] != img.shape[-2:]:
                 pred = F.interpolate(pred,
-                                     size=img.shape[-2:],
-                                     mode='bicubic',
-                                     align_corners=True).squeeze()
+                                    size=img.shape[-2:],
+                                    mode='bicubic',
+                                    align_corners=True).squeeze()
             # process one sentence
-            h, w = param['ori_size'].numpy()[0]
-            mat = param['inverse'].numpy()[0]
+            h, w = params['original_frame_size'].numpy()[0]
+            mat = params['inverse'].numpy()[0]
             pred = pred.cpu().numpy()
             pred = cv2.warpAffine(pred, mat, (w, h),
-                                  flags=cv2.INTER_CUBIC,
-                                  borderValue=0.)
+                                flags=cv2.INTER_CUBIC,
+                                borderValue=0.)
             pred = np.array(pred > 0.35)
-            # iou
-            inter = np.logical_and(pred, mask)
-            union = np.logical_or(pred, mask)
-            iou = np.sum(inter) / (np.sum(union) + 1e-6)
-            iou_list.append(iou)
+
             # dump prediction
             if args.visualize:
                 pred = np.array(pred*255, dtype=np.uint8)
-                sent = "_".join(sent[0].split(" "))
-                pred_name = '{}-iou={:.2f}-{}.png'.format(seg_id, iou*100, sent)
-                cv2.imwrite(filename=os.path.join(args.vis_dir, pred_name),
-                            img=pred)
-    logger.info('=> Metric Calculation <=')
-    iou_list = np.stack(iou_list)
-    iou_list = torch.from_numpy(iou_list).to(img.device)
-    prec_list = []
-    for thres in torch.arange(0.5, 1.0, 0.1):
-        tmp = (iou_list > thres).float().mean()
-        prec_list.append(tmp)
-    iou = iou_list.mean()
-    prec = {}
-    for i, thres in enumerate(range(5, 10)):
-        key = 'Pr@{}'.format(thres*10)
-        value = prec_list[i].item()
-        prec[key] = value
-    logger.info('IoU={:.2f}'.format(100.*iou.item()))
-    for k, v in prec.items():
-        logger.info('{}: {:.2f}.'.format(k, 100.*v))
+                sent = "_".join(text_query[0].split(" "))
+                pred_name = 'pred-{}-{}-{}.jpg'.format(video_id,frame_indice,sent)
+                cv2.imwrite(filename=os.path.join(args.vis_dir, video_id, pred_name),
+                                img=pred)
 
-    return iou.item(), prec
+    # logger.info('=> Metric Calculation <=')
+    # iou_list = np.stack(iou_list)
+    # iou_list = torch.from_numpy(iou_list).to(img.device)
+    # prec_list = []
+    # for thres in torch.arange(0.5, 1.0, 0.1):
+    #     tmp = (iou_list > thres).float().mean()
+    #     prec_list.append(tmp)
+    # iou = iou_list.mean()
+    # prec = {}
+    # for i, thres in enumerate(range(5, 10)):
+    #     key = 'Pr@{}'.format(thres*10)
+    #     value = prec_list[i].item()
+    #     prec[key] = value
+    # logger.info('IoU={:.2f}'.format(100.*iou.item()))
+    # for k, v in prec.items():
+    #     logger.info('{}: {:.2f}.'.format(k, 100.*v))
+
+    # return iou.item(), prec

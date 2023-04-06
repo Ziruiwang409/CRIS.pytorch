@@ -1,10 +1,10 @@
 DATA:
   dataset: refcoco
-  train_lmdb: datasets/lmdb/refcoco/train.lmdb
+  train_lmdb: /data/ziruiw3/CRIS.pytorch/datasets/lmdb/refcoco/train.lmdb
   train_split: train
-  val_lmdb: datasets/lmdb/refcoco/val.lmdb
+  val_lmdb: /data/ziruiw3/CRIS.pytorch/datasets/lmdb/refcoco/val.lmdb
   val_split: val
-  mask_root: datasets/masks/refcoco
+  mask_root: /data/ziruiw3/CRIS.pytorch/datasets/masks/refcoco
 TRAIN:
   # Base Arch
   clip_pretrain: pretrain/RN50.pt
@@ -51,5 +51,5 @@ Distributed:
   rank: 0
 TEST:
   test_split: val-test
-  test_lmdb: datasets/lmdb/refcoco/val.lmdb
-  visualize: False
+  test_lmdb: /data/ziruiw3/CRIS.pytorch/datasets/lmdb/refcoco/val.lmdb
+  visualize: True

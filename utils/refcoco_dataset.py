@@ -101,7 +101,7 @@ class RefDataset(Dataset):
         self.dataset = dataset
         self.split = split
         self.mode = mode
-        self.input_size = (input_size, input_size)
+        self.input_size = (416, 416)
         self.word_length = word_length
         self.mean = torch.tensor([0.48145466, 0.4578275,
                                   0.40821073]).reshape(3, 1, 1)
@@ -137,6 +137,7 @@ class RefDataset(Dataset):
                                cv2.IMREAD_COLOR)
         img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB)
         img_size = img.shape[:2]
+       
         # mask
         seg_id = ref['seg_id']
         mask_dir = os.path.join(self.mask_dir, str(seg_id) + '.png')
@@ -148,7 +149,7 @@ class RefDataset(Dataset):
         img = cv2.warpAffine(
             img,
             mat,
-            self.input_size,
+            (416,416),
             flags=cv2.INTER_CUBIC,
             borderValue=[0.48145466 * 255, 0.4578275 * 255, 0.40821073 * 255])
         if self.mode == 'train':
@@ -212,7 +213,8 @@ class RefDataset(Dataset):
         img = torch.from_numpy(img.transpose((2, 0, 1)))
         if not isinstance(img, torch.FloatTensor):
             img = img.float()
-        img.div_(255.).sub_(self.mean).div_(self.std)
+        img.div_(255.).sub_(torch.tensor([0.48145466, 0.4578275,0.40821073]).reshape(3, 1, 1)).div_(torch.tensor([0.26862954, 0.26130258,
+                                 0.27577711]).reshape(3, 1, 1))
         # Mask ToTensor
         if mask is not None:
             mask = torch.from_numpy(mask)

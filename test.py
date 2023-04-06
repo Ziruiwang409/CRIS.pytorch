@@ -11,7 +11,8 @@ from loguru import logger
 import utils.config as config
 from engine.engine import inference
 from model import build_segmenter
-from utils.dataset import RefDataset
+from utils.refcoco_dataset import RefDataset
+from utils.refer_youtube_vos.refer_youtube_vos_dataset import ReferYouTubeVOSDataset
 from utils.misc import setup_logger
 
 warnings.filterwarnings("ignore")
@@ -53,19 +54,40 @@ def main():
     logger.info(args)
 
     # build dataset & dataloader
-    test_data = RefDataset(lmdb_dir=args.test_lmdb,
-                           mask_dir=args.mask_root,
-                           dataset=args.dataset,
-                           split=args.test_split,
-                           mode='test',
-                           input_size=args.input_size,
-                           word_length=args.word_len)
+    # build Reffering dadaset
+    
+    
+    #test_data = RefDataset(lmdb_dir=args.test_lmdb,
+    #                       mask_dir=args.mask_root,
+    #                       dataset=args.dataset,
+    #                       split=args.test_split,
+    #                       mode='test',
+    #                       input_size=args.input_size,
+    #                       word_length=args.word_len)
+    
+    test_data = ReferYouTubeVOSDataset(lmdb_dir=args.test_lmdb,
+                                       mask_dir=args.mask_root,
+                                       dataset=args.dataset,
+                                       split=args.test_split,
+                                       mode='test',
+                                       input_size=args.input_size,
+                                       word_length=args.word_len,
+                                       dataset_path='/data/ziruiw3/refer_youtube_vos')
+    
+    source_frames, params, text_query = test_data[829]
+    print(type(source_frames[0]))
+    print("There are", len(source_frames), "images in the file")
+    print("params: ", params)
+    print("text query type: ", type(text_query))
+    print("Attached text query:", text_query)
+
     test_loader = torch.utils.data.DataLoader(test_data,
                                               batch_size=1,
                                               shuffle=False,
                                               num_workers=1,
                                               pin_memory=True)
 
+                                             
     # build model
     model, _ = build_segmenter(args)
     model = torch.nn.DataParallel(model).cuda()
@@ -84,6 +106,7 @@ def main():
 
     # inference
     inference(test_loader, model, args)
+    
 
 
 if __name__ == '__main__':
